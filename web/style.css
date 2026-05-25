@@ -231,3 +231,15 @@ hr.divider { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
   .glossary dl { grid-template-columns: 1fr; gap: 4px 0; }
   .glossary dt { margin-top: 10px; }
 }
+
+/* system tab — renders SYSTEM_DASHBOARD.md */
+.system-md h2 { margin: 22px 0 10px; font-size: 15px; }
+.system-md h2:first-of-type { margin-top: 0; }
+.system-md h3 { margin: 18px 0 8px; }
+.system-md table { margin: 8px 0 18px; }
+.system-md p { margin: 6px 0 12px; color: var(--text); }
+.system-md ul { margin: 6px 0 14px; padding-left: 20px; }
+.system-md ul li { margin: 2px 0; }
+.system-md pre { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; overflow-x: auto; font-size: 12px; }
+.system-md code { font-family: var(--mono); font-size: 12px; color: var(--text); }
+.system-md hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }

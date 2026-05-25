@@ -4,6 +4,7 @@ from __future__ import annotations
 import http.server
 import json
 import mimetypes
+import os
 import queue
 import threading
 import time
@@ -50,6 +51,23 @@ def _clamp_limit(raw, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, min(v, MAX_LIMIT))
+
+
+def _resolve_system_dashboard_path() -> Path | None:
+    """Resolve the configured system dashboard markdown file.
+
+    Order: SYSTEM_DASHBOARD_MD env → $PROJECTS/infrastructure/SYSTEM_DASHBOARD.md.
+    Returns None if unset or the file does not exist.
+    """
+    raw = os.environ.get("SYSTEM_DASHBOARD_MD")
+    if not raw:
+        proj = os.environ.get("PROJECTS")
+        if proj:
+            raw = str(Path(proj) / "infrastructure" / "SYSTEM_DASHBOARD.md")
+    if not raw:
+        return None
+    p = Path(raw).expanduser()
+    return p if p.is_file() else None
 
 
 def _serve_static(handler, rel: str) -> None:
@@ -144,6 +162,24 @@ def build_handler(db_path: str, projects_dir: str):
             if path == "/api/scan":
                 n = scan_dir(projects_dir, db_path)
                 return _send_json(self, n)
+            if path == "/api/system":
+                p = _resolve_system_dashboard_path()
+                if p is None:
+                    return _send_json(self, {
+                        "configured": False,
+                        "hint": "Set SYSTEM_DASHBOARD_MD (or $PROJECTS) to point at a SYSTEM_DASHBOARD.md file.",
+                    })
+                try:
+                    md = p.read_text(encoding="utf-8")
+                    mtime = p.stat().st_mtime
+                except OSError as e:
+                    return _send_json(self, {"configured": True, "path": str(p), "error": str(e)})
+                return _send_json(self, {
+                    "configured": True,
+                    "path": str(p),
+                    "mtime": mtime,
+                    "markdown": md,
+                })
             if path == "/api/stream":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")

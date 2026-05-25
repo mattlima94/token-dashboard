@@ -32,6 +32,7 @@ export async function api(path, opts) {
 export const state = { plan: 'api', pricing: null };
 
 const ROUTES = {
+  '/system':   () => import('/web/routes/system.js'),
   '/overview': () => import('/web/routes/overview.js'),
   '/prompts':  () => import('/web/routes/prompts.js'),
   '/sessions': () => import('/web/routes/sessions.js'),
