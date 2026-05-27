@@ -1,113 +1,6 @@
-// system.js — renders SYSTEM_DASHBOARD.md (or any configured markdown) as a tab.
+// system.js — data-driven dashboard rendering agents_status.json.
+// Falls back to a minimal markdown renderer when the API returns fallback: "markdown".
 import { api, fmt } from '/web/app.js';
-
-function escapeHtml(s) {
-  return (s ?? '').replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
-function inline(s) {
-  // Inline code first so markdown inside it is left alone.
-  s = s.replace(/`([^`]+)`/g, (_, c) => `<code>${escapeHtml(c)}</code>`);
-  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
-  return s;
-}
-
-function isTableHeader(line, nextLine) {
-  return line && nextLine && line.includes('|') &&
-    /^\s*\|?[\s\-:|]+\|[\s\-:|]+/.test(nextLine);
-}
-
-function splitRow(line) {
-  return line.split('|')
-    .map(c => c.trim())
-    .filter((c, idx, arr) => !(idx === 0 && c === '') && !(idx === arr.length - 1 && c === ''));
-}
-
-function renderMarkdown(md) {
-  const lines = md.split('\n');
-  const out = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // Fenced code block
-    if (line.startsWith('```')) {
-      const buf = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith('```')) {
-        buf.push(lines[i]); i++;
-      }
-      i++; // closing ```
-      out.push(`<pre><code>${escapeHtml(buf.join('\n'))}</code></pre>`);
-      continue;
-    }
-
-    // Headings
-    const h = line.match(/^(#{1,6})\s+(.*)$/);
-    if (h) {
-      const lvl = h[1].length;
-      out.push(`<h${lvl}>${inline(escapeHtml(h[2]))}</h${lvl}>`);
-      i++; continue;
-    }
-
-    // Table
-    if (isTableHeader(line, lines[i + 1])) {
-      const header = splitRow(line);
-      i += 2;
-      const rows = [];
-      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
-        rows.push(splitRow(lines[i]));
-        i++;
-      }
-      out.push(
-        '<table><thead><tr>' +
-        header.map(c => `<th>${inline(escapeHtml(c))}</th>`).join('') +
-        '</tr></thead><tbody>' +
-        rows.map(r =>
-          '<tr>' + r.map(c => `<td>${inline(escapeHtml(c))}</td>`).join('') + '</tr>'
-        ).join('') +
-        '</tbody></table>'
-      );
-      continue;
-    }
-
-    // Unordered list
-    if (/^\s*-\s+/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^\s*-\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\s*-\s+/, ''));
-        i++;
-      }
-      out.push('<ul>' + items.map(it => `<li>${inline(escapeHtml(it))}</li>`).join('') + '</ul>');
-      continue;
-    }
-
-    // Horizontal rule
-    if (/^---+$/.test(line.trim())) {
-      out.push('<hr>'); i++; continue;
-    }
-
-    // Blank line
-    if (line.trim() === '') { i++; continue; }
-
-    // Paragraph
-    const buf = [];
-    while (
-      i < lines.length &&
-      lines[i].trim() !== '' &&
-      !lines[i].startsWith('#') &&
-      !lines[i].startsWith('```') &&
-      !/^\s*-\s+/.test(lines[i]) &&
-      !isTableHeader(lines[i], lines[i + 1])
-    ) {
-      buf.push(lines[i]); i++;
-    }
-    if (buf.length) out.push(`<p>${inline(escapeHtml(buf.join(' ')))}</p>`);
-  }
-  return out.join('\n');
-}
 
 function ageLabel(mtime) {
   const min = Math.round(Date.now() / 1000 - mtime) / 60;
@@ -116,32 +9,132 @@ function ageLabel(mtime) {
   return `${Math.round(min / 1440)}d ago`;
 }
 
-export default async function (root) {
-  const data = await api('/api/system');
+function attentionCards(attention) {
+  const esc = attention.escalations || { count: 0, items: [] };
+  const drift = attention.schema_drift || { count: 0, items: [], fix_hint: '' };
+  const stale = attention.stale_agents || { count: 0, items: [] };
 
-  if (!data.configured) {
-    root.innerHTML = `
-      <div class="card">
-        <h2>System Dashboard</h2>
-        <p class="muted">${fmt.htmlSafe(data.hint || 'Not configured.')}</p>
-      </div>`;
-    return;
-  }
-  if (data.error) {
-    root.innerHTML = `
-      <div class="card">
-        <h2>System Dashboard</h2>
-        <p class="muted">Failed to read <code>${fmt.htmlSafe(data.path)}</code>: ${fmt.htmlSafe(data.error)}</p>
-      </div>`;
-    return;
-  }
+  const cards = [
+    {
+      id: 'escalations',
+      label: 'Escalations',
+      value: esc.count,
+      sub: 'in message bus',
+      sev: esc.count > 0 ? 'red' : 'green',
+      detail: esc.items.length ? `
+        <div class="sys-detail">
+          ${esc.items.map(it => `
+            <div class="di">
+              <span class="dot red"></span>
+              <span>${fmt.htmlSafe(it.subject || it.filename)}</span>
+              <span class="meta">${fmt.htmlSafe(it.from_agent || '')}</span>
+            </div>`).join('')}
+        </div>` : '',
+    },
+    {
+      id: 'drift',
+      label: 'Schema drift',
+      value: drift.count,
+      sub: 'agents with malformed state.json',
+      sev: drift.count > 0 ? 'amber' : 'green',
+      detail: drift.items.length ? `
+        <div class="sys-detail">
+          ${drift.items.map(it => `
+            <div class="di">
+              <span class="dot amber"></span>
+              <span><code>${fmt.htmlSafe(it.agent)}</code> — missing
+                ${(it.missing || []).map(m => `<code>${fmt.htmlSafe(m)}</code>`).join(', ') || '<em>none</em>'}${
+                (it.malformed || []).length ? `; malformed ${(it.malformed || []).map(m => `<code>${fmt.htmlSafe(m)}</code>`).join(', ')}` : ''
+              }</span>
+            </div>`).join('')}
+          ${drift.fix_hint ? `<div class="fix-hint">Fix: ${fmt.htmlSafe(drift.fix_hint)}</div>` : ''}
+        </div>` : '',
+    },
+    {
+      id: 'stale',
+      label: 'Stale agents',
+      value: stale.count,
+      sub: `no run in >${stale.threshold_days || 1} day(s)`,
+      sev: stale.count > 0 ? 'amber' : 'green',
+      detail: stale.items.length ? `
+        <div class="sys-detail">
+          ${stale.items.map(it => `
+            <div class="di">
+              <span class="dot amber"></span>
+              <span><code>${fmt.htmlSafe(it.agent)}</code></span>
+              <span class="meta">${fmt.htmlSafe(it.last_run_age)}</span>
+            </div>`).join('')}
+        </div>` : '',
+    },
+  ];
 
+  return cards.map(c => `
+    <div class="sys-card" data-card="${c.id}">
+      ${c.detail ? '<div class="chev">▸</div>' : ''}
+      <div class="l">${c.label}</div>
+      <div class="v ${c.sev}">${fmt.int(c.value)}</div>
+      <div class="sub">${c.sub}</div>
+      ${c.detail}
+    </div>
+  `).join('');
+}
+
+function wireCardExpansion(root) {
+  root.querySelectorAll('.sys-card').forEach(card => {
+    if (!card.querySelector('.sys-detail')) return;
+    card.addEventListener('click', () => {
+      const wasExpanded = card.classList.contains('expanded');
+      root.querySelectorAll('.sys-card.expanded').forEach(c => c.classList.remove('expanded'));
+      if (!wasExpanded) card.classList.add('expanded');
+    });
+  });
+}
+
+function renderLegacyMarkdown(root, body) {
+  const text = body.markdown || '';
   root.innerHTML = `
-    <div class="card system-md">
-      <div style="display:flex;align-items:baseline;gap:12px;margin:-2px 0 14px;flex-wrap:wrap">
-        <h2 style="margin:0">System Dashboard</h2>
-        <span class="muted" style="font-size:12px">source: <code>${fmt.htmlSafe(data.path)}</code> · regenerated ${ageLabel(data.mtime)}</span>
-      </div>
-      ${renderMarkdown(data.markdown)}
+    <div class="card">
+      <h2 style="margin:0 0 12px">System Dashboard <span class="muted" style="font-size:12px;font-weight:400">— markdown fallback</span></h2>
+      <p class="muted" style="font-size:12px;margin:-4px 0 12px">
+        <code>${fmt.htmlSafe(body.path || '')}</code> · regenerated ${ageLabel(body.mtime)}
+      </p>
+      <pre style="white-space:pre-wrap;font-family:var(--mono);font-size:12px;background:var(--panel-2);padding:12px;border-radius:6px;border:1px solid var(--border)">${fmt.htmlSafe(text)}</pre>
     </div>`;
+}
+
+export default async function (root) {
+  const body = await api('/api/system');
+
+  if (!body.configured) {
+    root.innerHTML = `
+      <div class="card">
+        <h2>System Dashboard</h2>
+        <p class="muted">${fmt.htmlSafe(body.hint || 'Not configured.')}</p>
+      </div>`;
+    return;
+  }
+  if (body.error) {
+    root.innerHTML = `
+      <div class="card">
+        <h2>System Dashboard</h2>
+        <p class="muted">Failed to read <code>${fmt.htmlSafe(body.path)}</code>: ${fmt.htmlSafe(body.error)}</p>
+      </div>`;
+    return;
+  }
+  if (body.fallback === 'markdown') {
+    return renderLegacyMarkdown(root, body);
+  }
+
+  const data = body.data;
+  root.innerHTML = `
+    <div class="flex" style="margin-bottom:14px">
+      <h2 style="margin:0;font-size:16px;letter-spacing:-0.01em">System Dashboard</h2>
+      <span class="muted" style="font-size:12px">regenerated ${ageLabel(body.mtime)}</span>
+    </div>
+
+    <div class="sys-section-h">Attention</div>
+    <div class="sys-grid-3" id="sys-attention">${attentionCards(data.attention || {})}</div>
+  `;
+
+  wireCardExpansion(document.getElementById('sys-attention'));
 }

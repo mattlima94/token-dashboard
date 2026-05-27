@@ -232,7 +232,70 @@ hr.divider { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
   .glossary dt { margin-top: 10px; }
 }
 
-/* system tab — renders SYSTEM_DASHBOARD.md */
+/* system tab — data-driven dashboard */
+.sys-section-h {
+  font-size: 11px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.08em; font-weight: 600;
+  margin: 22px 0 10px;
+}
+.sys-section-h:first-child { margin-top: 0; }
+.sys-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+@media (max-width: 900px) { .sys-grid-3 { grid-template-columns: 1fr; } }
+
+.sys-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px; cursor: pointer; position: relative;
+  transition: border-color 120ms;
+}
+.sys-card:hover { border-color: var(--border-2); }
+.sys-card.expanded { grid-column: 1 / -1; cursor: default; border-color: var(--border-2); }
+.sys-card .chev {
+  position: absolute; top: 12px; right: 12px;
+  color: var(--muted-2); font-size: 11px;
+  transition: transform 120ms;
+}
+.sys-card.expanded .chev { transform: rotate(90deg); }
+.sys-card .l {
+  font-size: 10px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.06em; font-weight: 600;
+}
+.sys-card .v {
+  font-family: var(--mono); font-size: 22px;
+  font-variant-numeric: tabular-nums; line-height: 1.1;
+  margin-top: 4px;
+}
+.sys-card .sub { color: var(--muted-2); font-size: 11px; margin-top: 3px; }
+.sys-card .v.red   { color: var(--bad); }
+.sys-card .v.amber { color: var(--warn); }
+.sys-card .v.green { color: var(--good); }
+.sys-card .v.blue  { color: var(--accent); }
+
+.sys-detail {
+  display: none;
+  margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.sys-card.expanded .sys-detail { display: block; }
+.sys-detail .di {
+  padding: 6px 0; border-bottom: 1px dashed var(--border);
+  display: flex; gap: 8px; align-items: center;
+}
+.sys-detail .di:last-child { border-bottom: 0; }
+.sys-detail .di .dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.sys-detail .di .meta {
+  font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: auto;
+}
+.sys-detail .di .dot.amber { background: var(--warn); }
+.sys-detail .di .dot.red   { background: var(--bad); }
+.sys-detail .di .dot.green { background: var(--good); }
+.sys-detail .fix-hint {
+  margin-top: 10px; font-size: 12px; color: var(--muted);
+}
+
+/* legacy markdown fallback (system tab) */
 .system-md h2 { margin: 22px 0 10px; font-size: 15px; }
 .system-md h2:first-of-type { margin-top: 0; }
 .system-md h3 { margin: 18px 0 8px; }
