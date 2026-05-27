@@ -69,6 +69,44 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(resp.status, 200)
             self.assertEqual(resp.read(), b"")
 
+    def test_system_returns_json_when_present(self):
+        tmpdir = tempfile.mkdtemp()
+        md_path = os.path.join(tmpdir, "SYSTEM_DASHBOARD.md")
+        json_path = os.path.join(tmpdir, "agents_status.json")
+        open(md_path, "w").write("# legacy")
+        json.dump({"generated_at": "2026-05-26T03:00:00Z", "agents": [{"name": "x"}]},
+                  open(json_path, "w"))
+        os.environ["SYSTEM_DASHBOARD_MD"] = md_path
+        try:
+            body = json.loads(self._get("/api/system"))
+        finally:
+            del os.environ["SYSTEM_DASHBOARD_MD"]
+        self.assertTrue(body["configured"])
+        self.assertIsNone(body.get("fallback"))
+        self.assertEqual(body["data"]["generated_at"], "2026-05-26T03:00:00Z")
+        self.assertEqual(body["data"]["agents"][0]["name"], "x")
+
+    def test_system_falls_back_to_markdown_when_no_json(self):
+        tmpdir = tempfile.mkdtemp()
+        md_path = os.path.join(tmpdir, "SYSTEM_DASHBOARD.md")
+        open(md_path, "w").write("# legacy heading\n\nbody text")
+        os.environ["SYSTEM_DASHBOARD_MD"] = md_path
+        try:
+            body = json.loads(self._get("/api/system"))
+        finally:
+            del os.environ["SYSTEM_DASHBOARD_MD"]
+        self.assertTrue(body["configured"])
+        self.assertEqual(body["fallback"], "markdown")
+        self.assertIn("legacy heading", body["markdown"])
+
+    def test_system_unconfigured_when_neither_exists(self):
+        os.environ["SYSTEM_DASHBOARD_MD"] = "/nonexistent/path.md"
+        try:
+            body = json.loads(self._get("/api/system"))
+        finally:
+            del os.environ["SYSTEM_DASHBOARD_MD"]
+        self.assertFalse(body["configured"])
+
     def test_head_api_endpoint(self):
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/overview", method="HEAD")
         with urllib.request.urlopen(req) as resp:

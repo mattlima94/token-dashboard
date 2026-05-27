@@ -70,6 +70,19 @@ def _resolve_system_dashboard_path() -> Path | None:
     return p if p.is_file() else None
 
 
+def _resolve_status_json_path() -> Path | None:
+    """Resolve agents_status.json — assumed to sit next to SYSTEM_DASHBOARD.md."""
+    raw = os.environ.get("SYSTEM_DASHBOARD_MD")
+    if not raw:
+        proj = os.environ.get("PROJECTS")
+        if proj:
+            raw = str(Path(proj) / "infrastructure" / "SYSTEM_DASHBOARD.md")
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser().parent / "agents_status.json"
+    return candidate if candidate.is_file() else None
+
+
 def _serve_static(handler, rel: str) -> None:
     rel = rel.lstrip("/")
     p = (WEB_ROOT / rel).resolve()
@@ -163,22 +176,43 @@ def build_handler(db_path: str, projects_dir: str):
                 n = scan_dir(projects_dir, db_path)
                 return _send_json(self, n)
             if path == "/api/system":
-                p = _resolve_system_dashboard_path()
-                if p is None:
+                json_path = _resolve_status_json_path()
+                md_path = _resolve_system_dashboard_path()
+
+                if json_path is not None:
+                    try:
+                        data = json.loads(json_path.read_text(encoding="utf-8"))
+                        mtime = json_path.stat().st_mtime
+                    except (OSError, json.JSONDecodeError) as e:
+                        return _send_json(self, {
+                            "configured": True, "path": str(json_path), "error": str(e),
+                        })
                     return _send_json(self, {
-                        "configured": False,
-                        "hint": "Set SYSTEM_DASHBOARD_MD (or $PROJECTS) to point at a SYSTEM_DASHBOARD.md file.",
+                        "configured": True,
+                        "path": str(json_path),
+                        "mtime": mtime,
+                        "data": data,
                     })
-                try:
-                    md = p.read_text(encoding="utf-8")
-                    mtime = p.stat().st_mtime
-                except OSError as e:
-                    return _send_json(self, {"configured": True, "path": str(p), "error": str(e)})
+
+                if md_path is not None:
+                    try:
+                        md = md_path.read_text(encoding="utf-8")
+                        mtime = md_path.stat().st_mtime
+                    except OSError as e:
+                        return _send_json(self, {
+                            "configured": True, "path": str(md_path), "error": str(e),
+                        })
+                    return _send_json(self, {
+                        "configured": True,
+                        "path": str(md_path),
+                        "mtime": mtime,
+                        "fallback": "markdown",
+                        "markdown": md,
+                    })
+
                 return _send_json(self, {
-                    "configured": True,
-                    "path": str(p),
-                    "mtime": mtime,
-                    "markdown": md,
+                    "configured": False,
+                    "hint": "Set SYSTEM_DASHBOARD_MD (or $PROJECTS) to point at a SYSTEM_DASHBOARD.md file. agents_status.json may sit alongside it.",
                 })
             if path == "/api/stream":
                 self.send_response(200)
