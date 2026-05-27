@@ -212,5 +212,149 @@ class ProjectNameInQueriesTests(unittest.TestCase):
         self.assertEqual(by_sid["s2"]["project_name"], "slugOnly")
 
 
+import sqlite3, time
+from datetime import datetime, timedelta, timezone
+from token_dashboard.db import (
+    init_db, session_live_map, session_aggregates,
+    augment_sessions_with_liveness, usage_volume,
+)
+
+
+class SessionLiveMapTests(unittest.TestCase):
+    def test_returns_mtime_keyed_by_session_id(self):
+        tmp = tempfile.mkdtemp()
+        db = os.path.join(tmp, "t.db")
+        init_db(db)
+        now = time.time()
+        with sqlite3.connect(db) as c:
+            c.execute("INSERT INTO files VALUES (?, ?, 0, ?)",
+                      ("/p/projects/foo/sess-aaa.jsonl", now - 30, now))
+            c.execute("INSERT INTO files VALUES (?, ?, 0, ?)",
+                      ("/p/projects/foo/sess-bbb.jsonl", now - 3600, now))
+            c.commit()
+        m = session_live_map(db)
+        self.assertAlmostEqual(m["sess-aaa"], now - 30, places=1)
+        self.assertAlmostEqual(m["sess-bbb"], now - 3600, places=1)
+
+    def test_ignores_non_jsonl_paths(self):
+        tmp = tempfile.mkdtemp()
+        db = os.path.join(tmp, "t.db")
+        init_db(db)
+        now = time.time()
+        with sqlite3.connect(db) as c:
+            c.execute("INSERT INTO files VALUES (?, ?, 0, ?)",
+                      ("/p/projects/foo/notes.txt", now, now))
+            c.commit()
+        self.assertEqual(session_live_map(db), {})
+
+
+class AugmentLivenessTests(unittest.TestCase):
+    def test_marks_recent_mtime_as_live(self):
+        now = time.time()
+        rows = [{"session_id": "live-1", "tokens": 100, "turns": 5}]
+        out = augment_sessions_with_liveness(
+            rows,
+            live_map={"live-1": now - 30},
+            cache_reads={"live-1": 1_000_000},
+            input_shares={"live-1": 0.40},
+            now=now,
+            live_threshold_seconds=300,
+        )
+        self.assertTrue(out[0]["is_live"])
+        self.assertEqual(out[0]["cache_read_tokens"], 1_000_000)
+        self.assertEqual(out[0]["input_share"], 0.40)
+        self.assertEqual(out[0]["heaviness"], "healthy")
+
+    def test_marks_old_mtime_as_closed(self):
+        now = time.time()
+        rows = [{"session_id": "old-1", "tokens": 100, "turns": 5}]
+        out = augment_sessions_with_liveness(
+            rows, live_map={"old-1": now - 3600},
+            cache_reads={}, input_shares={}, now=now, live_threshold_seconds=300,
+        )
+        self.assertFalse(out[0]["is_live"])
+        self.assertEqual(out[0]["heaviness"], "closed")
+
+    def test_heavy_when_turns_over_threshold(self):
+        now = time.time()
+        rows = [{"session_id": "x", "tokens": 100, "turns": 60}]
+        out = augment_sessions_with_liveness(
+            rows, live_map={"x": now - 10}, cache_reads={"x": 0},
+            input_shares={"x": 0.10}, now=now, live_threshold_seconds=300,
+        )
+        self.assertEqual(out[0]["heaviness"], "heavy")
+
+    def test_heavy_when_cache_read_over_threshold(self):
+        now = time.time()
+        rows = [{"session_id": "x", "tokens": 100, "turns": 5}]
+        out = augment_sessions_with_liveness(
+            rows, live_map={"x": now - 10}, cache_reads={"x": 6_000_000},
+            input_shares={"x": 0.10}, now=now, live_threshold_seconds=300,
+        )
+        self.assertEqual(out[0]["heaviness"], "heavy")
+
+    def test_heavy_when_input_share_over_threshold(self):
+        now = time.time()
+        rows = [{"session_id": "x", "tokens": 100, "turns": 5}]
+        out = augment_sessions_with_liveness(
+            rows, live_map={"x": now - 10}, cache_reads={"x": 0},
+            input_shares={"x": 0.75}, now=now, live_threshold_seconds=300,
+        )
+        self.assertEqual(out[0]["heaviness"], "heavy")
+
+
+class SessionAggregatesTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, "t.db")
+        init_db(self.db)
+        with sqlite3.connect(self.db) as c:
+            c.execute("INSERT INTO messages (uuid, parent_uuid, session_id, project_slug, type, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_create_5m_tokens, cache_create_1h_tokens) VALUES ('u1', NULL, 's1', 'p', 'user', '2026-01-01', 100, 0, 0, 0, 0)")
+            c.execute("INSERT INTO messages (uuid, parent_uuid, session_id, project_slug, type, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_create_5m_tokens, cache_create_1h_tokens) VALUES ('a1', 'u1', 's1', 'p', 'assistant', '2026-01-01', 0, 50, 500, 25, 0)")
+            c.commit()
+
+    def test_cache_reads_and_input_shares_by_session(self):
+        cr, isr = session_aggregates(self.db, ["s1"])
+        self.assertEqual(cr["s1"], 500)
+        self.assertAlmostEqual(isr["s1"], 125 / 175, places=3)
+
+    def test_missing_session_returns_zero(self):
+        cr, isr = session_aggregates(self.db, ["nonexistent"])
+        self.assertEqual(cr.get("nonexistent", 0), 0)
+        self.assertEqual(isr.get("nonexistent", 0.0), 0.0)
+
+
+class UsageVolumeTests(unittest.TestCase):
+    def test_bucket_counts_only_within_window(self):
+        tmp = tempfile.mkdtemp()
+        db = os.path.join(tmp, "t.db")
+        init_db(db)
+        now = datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc)
+        recent = (now - timedelta(hours=2)).isoformat()
+        week_old = (now - timedelta(days=4)).isoformat()
+        month_old = (now - timedelta(days=20)).isoformat()
+        ancient = (now - timedelta(days=60)).isoformat()
+        with sqlite3.connect(db) as c:
+            for ts, sess, ttype, i, o, cc in [
+                (recent,     "s1", "user",      100, 0,   0),
+                (recent,     "s1", "assistant", 0,   200, 50),
+                (week_old,   "s2", "user",      300, 0,   0),
+                (week_old,   "s2", "assistant", 0,   400, 100),
+                (month_old,  "s3", "user",      500, 0,   0),
+                (month_old,  "s3", "assistant", 0,   600, 200),
+                (ancient,    "s4", "user",      999, 999, 999),
+            ]:
+                c.execute("INSERT INTO messages (uuid, parent_uuid, session_id, project_slug, type, timestamp, input_tokens, output_tokens, cache_read_tokens, cache_create_5m_tokens, cache_create_1h_tokens) VALUES (?, NULL, ?, 'p', ?, ?, ?, ?, 0, ?, 0)",
+                          (f"u-{ts}-{sess}-{ttype}", sess, ttype, ts, i, o, cc))
+            c.commit()
+        v = usage_volume(db, now=now)
+        b = {row["window"]: row for row in v["buckets"]}
+        self.assertEqual(b["24h"]["tokens"], 350)
+        self.assertEqual(b["24h"]["sessions"], 1)
+        self.assertEqual(b["24h"]["turns"], 1)
+        self.assertEqual(b["7d"]["tokens"], 1150)
+        self.assertEqual(b["30d"]["tokens"], 2450)
+
+
 if __name__ == "__main__":
     unittest.main()

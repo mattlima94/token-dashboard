@@ -297,6 +297,122 @@ def recent_sessions(db_path, limit: int = 20, since=None, until=None) -> list:
     return rows
 
 
+HEAVY_TURNS = 50
+HEAVY_CACHE_TOKENS = 5_000_000
+HEAVY_INPUT_SHARE = 0.60
+LIVE_THRESHOLD_SECONDS = 300
+
+
+def session_live_map(db_path) -> dict:
+    """Return {session_id: mtime} from the files table.
+
+    Session id is the JSONL filename stem; non-.jsonl files are skipped.
+    """
+    import os
+    out = {}
+    with connect(db_path) as c:
+        for row in c.execute("SELECT path, mtime FROM files"):
+            name = os.path.basename(row["path"])
+            if not name.endswith(".jsonl"):
+                continue
+            out[name[:-len(".jsonl")]] = row["mtime"]
+    return out
+
+
+def session_aggregates(db_path, session_ids: list) -> tuple:
+    """Per-session (cache_read_tokens, input_share) for the given session_ids.
+
+    Returns ({sid: cache_read_int}, {sid: input_share_float_0_1}).
+    """
+    if not session_ids:
+        return {}, {}
+    placeholders = ",".join("?" * len(session_ids))
+    sql = f"""
+      SELECT session_id,
+             SUM(input_tokens) AS i,
+             SUM(output_tokens) AS o,
+             SUM(cache_read_tokens) AS cr,
+             SUM(cache_create_5m_tokens) + SUM(cache_create_1h_tokens) AS cc
+        FROM messages
+       WHERE session_id IN ({placeholders})
+       GROUP BY session_id
+    """
+    cache_reads, input_shares = {}, {}
+    with connect(db_path) as c:
+        for row in c.execute(sql, session_ids):
+            sid = row["session_id"]
+            i = row["i"] or 0
+            o = row["o"] or 0
+            cr = row["cr"] or 0
+            cc = row["cc"] or 0
+            denom = i + o + cc
+            cache_reads[sid] = cr
+            input_shares[sid] = (i + cc) / denom if denom else 0.0
+    return cache_reads, input_shares
+
+
+def augment_sessions_with_liveness(
+    rows: list,
+    live_map: dict,
+    cache_reads: dict,
+    input_shares: dict,
+    now=None,
+    live_threshold_seconds: int = LIVE_THRESHOLD_SECONDS,
+) -> list:
+    """Add is_live / cache_read_tokens / input_share / heaviness fields to each row."""
+    import time as _time
+    if now is None:
+        now = _time.time()
+    for r in rows:
+        sid = r["session_id"]
+        mtime = live_map.get(sid)
+        is_live = mtime is not None and (now - mtime) <= live_threshold_seconds
+        cache_read = int(cache_reads.get(sid, 0))
+        share = float(input_shares.get(sid, 0.0))
+        r["is_live"] = is_live
+        r["cache_read_tokens"] = cache_read
+        r["input_share"] = round(share, 3)
+        if not is_live:
+            r["heaviness"] = "closed"
+        elif (r.get("turns", 0) > HEAVY_TURNS
+              or cache_read > HEAVY_CACHE_TOKENS
+              or share > HEAVY_INPUT_SHARE):
+            r["heaviness"] = "heavy"
+        else:
+            r["heaviness"] = "healthy"
+    return rows
+
+
+def usage_volume(db_path, now=None) -> dict:
+    """Return billable-token volume aggregated into 24h / 7d / 30d buckets."""
+    from datetime import datetime, timedelta, timezone
+    if now is None:
+        now = datetime.now(timezone.utc)
+    windows = [("24h", timedelta(hours=24)), ("7d", timedelta(days=7)), ("30d", timedelta(days=30))]
+    out = []
+    with connect(db_path) as c:
+        for label, delta in windows:
+            since_iso = (now - delta).isoformat()
+            row = c.execute(
+                """
+                SELECT SUM(input_tokens) + SUM(output_tokens)
+                     + SUM(cache_create_5m_tokens) + SUM(cache_create_1h_tokens) AS tokens,
+                       COUNT(DISTINCT session_id) AS sessions,
+                       SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns
+                  FROM messages
+                 WHERE timestamp >= ?
+                """,
+                (since_iso,),
+            ).fetchone()
+            out.append({
+                "window": label,
+                "tokens": int(row["tokens"] or 0),
+                "sessions": int(row["sessions"] or 0),
+                "turns": int(row["turns"] or 0),
+            })
+    return {"buckets": out}
+
+
 def session_turns(db_path, session_id: str) -> list:
     sql = """
       SELECT uuid, parent_uuid, type, timestamp, model, is_sidechain, agent_id,
