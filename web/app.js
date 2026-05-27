@@ -31,6 +31,29 @@ export async function api(path, opts) {
 
 export const state = { plan: 'api', pricing: null };
 
+const LIVE_REFRESH_MS = 15000;
+const LIVE_ROUTES = ['/overview', '/sessions'];
+
+let livePollTimer = null;
+
+function startLivePoll() {
+  if (livePollTimer) return;
+  livePollTimer = setInterval(() => {
+    fetch('/api/scan', { method: 'POST' }).catch(() => {});
+  }, LIVE_REFRESH_MS);
+}
+
+function stopLivePoll() {
+  if (livePollTimer) {
+    clearInterval(livePollTimer);
+    livePollTimer = null;
+  }
+}
+
+function shouldPollLive(routeKey) {
+  return LIVE_ROUTES.includes(routeKey);
+}
+
 const ROUTES = {
   '/system':   () => import('/web/routes/system.js'),
   '/overview': () => import('/web/routes/overview.js'),
@@ -67,6 +90,8 @@ async function render() {
   let key = path;
   if (path.startsWith('/sessions/')) key = '/sessions';
   setActiveTab(key);
+  if (shouldPollLive(key)) startLivePoll();
+  else stopLivePoll();
   const loader = ROUTES[key] || ROUTES['/overview'];
   const mod = await loader();
   $('#app').innerHTML = '';
