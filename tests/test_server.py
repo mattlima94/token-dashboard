@@ -114,5 +114,25 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(resp.read(), b"")
 
 
+    def test_sessions_includes_is_live_and_heaviness(self):
+        body = json.loads(self._get("/api/sessions?limit=10"))
+        self.assertIsInstance(body, list)
+        self.assertGreater(len(body), 0)
+        s = body[0]
+        for field in ("is_live", "turns", "cache_read_tokens", "input_share", "heaviness"):
+            self.assertIn(field, s)
+        self.assertIn(s["heaviness"], ("heavy", "healthy", "closed"))
+
+    def test_usage_volume_endpoint(self):
+        body = json.loads(self._get("/api/usage-volume"))
+        self.assertIn("buckets", body)
+        labels = [b["window"] for b in body["buckets"]]
+        self.assertEqual(labels, ["24h", "7d", "30d"])
+        for b in body["buckets"]:
+            self.assertIn("tokens", b)
+            self.assertIn("sessions", b)
+            self.assertIn("turns", b)
+
+
 if __name__ == "__main__":
     unittest.main()

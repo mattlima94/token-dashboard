@@ -15,6 +15,8 @@ from .db import (
     overview_totals, expensive_prompts, project_summary,
     tool_token_breakdown, recent_sessions, session_turns,
     daily_token_breakdown, model_breakdown, skill_breakdown,
+    session_live_map, session_aggregates, augment_sessions_with_liveness,
+    usage_volume,
 )
 from .pricing import load_pricing, cost_for, get_plan, set_plan
 from .tips import all_tips, dismiss_tip
@@ -145,10 +147,17 @@ def build_handler(db_path: str, projects_dir: str):
             if path == "/api/tools":
                 return _send_json(self, tool_token_breakdown(db_path, since, until))
             if path == "/api/sessions":
-                return _send_json(self, recent_sessions(
+                rows = recent_sessions(
                     db_path, limit=_clamp_limit(qs.get("limit", ["20"])[0], 20),
                     since=since, until=until,
-                ))
+                )
+                live_map = session_live_map(db_path)
+                sids = [r["session_id"] for r in rows]
+                cache_reads, input_shares = session_aggregates(db_path, sids)
+                augment_sessions_with_liveness(rows, live_map, cache_reads, input_shares)
+                return _send_json(self, rows)
+            if path == "/api/usage-volume":
+                return _send_json(self, usage_volume(db_path))
             if path == "/api/daily":
                 return _send_json(self, daily_token_breakdown(db_path, since, until))
             if path == "/api/skills":
