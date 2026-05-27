@@ -39,7 +39,23 @@ export default async function (root) {
 
       <h3>Privacy</h3>
       <p class="muted">Press <code>Cmd/Ctrl + B</code> anywhere to blur prompt text and other sensitive content for screenshots.</p>
+
+      <hr class="divider">
+
+      <h3>Cost framing</h3>
+      <p class="muted" style="margin:0 0 10px;font-size:12px">
+        Dim the cost KPI on Overview. Useful on Max-plan subscriptions where per-token cost isn't a planning lever.
+      </p>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="cost-toggle" ${localStorage.getItem('td.show_cost') === '1' ? 'checked' : ''}>
+        <span>Show cost framing on Overview</span>
+      </label>
     </div>`;
+
+  $('#cost-toggle').addEventListener('change', e => {
+    if (e.target.checked) localStorage.setItem('td.show_cost', '1');
+    else localStorage.removeItem('td.show_cost');
+  });
 
   $('#save').addEventListener('click', async () => {
     const plan = $('#plan').value;
