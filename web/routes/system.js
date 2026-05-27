@@ -134,6 +134,76 @@ function activityCards(activity) {
   `).join('');
 }
 
+function agentTile(a) {
+  const tier = a.tier || 'worker';
+  const fresh = a.freshness || 'never';
+  const title = `${a.display_name || a.name}\nrole: ${a.role || '?'}\nlast run: ${a.last_run_age || 'never'}${a.last_run_iso ? ` (${a.last_run_iso})` : ''}${a.open_items != null ? `\nopen items: ${a.open_items}` : ''}`;
+  const meta = [a.last_run_age, a.open_items != null ? `${a.open_items} open` : null, a.phase ? `p${a.phase}` : null]
+    .filter(Boolean).join(' · ');
+  return `
+    <a href="#/sessions?agent=${encodeURIComponent(a.name)}"
+       class="sys-ag tier-${tier} ${fresh}" title="${fmt.htmlSafe(title)}">
+      <div class="dot"></div>
+      <div class="nm">${fmt.htmlSafe(a.display_name || a.name)}</div>
+      <div class="ts">${fmt.htmlSafe(meta || '—')}</div>
+    </a>`;
+}
+
+function healthGrid(agents) {
+  const byTierDiv = {
+    chair: [],
+    csuite: [],
+    personal: [],
+    business: [],
+    infra: [],
+  };
+  for (const a of agents) {
+    if (a.tier === 'chair') byTierDiv.chair.push(a);
+    else if (a.tier === 'csuite') byTierDiv.csuite.push(a);
+    else if (a.tier === 'infra') byTierDiv.infra.push(a);
+    else if (a.division === 'personal') byTierDiv.personal.push(a);
+    else if (a.division === 'business' || a.tier === 'venture') byTierDiv.business.push(a);
+    else byTierDiv.csuite.push(a);
+  }
+
+  const row = list => list.map(agentTile).join('');
+
+  return `
+    <div class="sys-org">
+      <div class="sys-org-row">${row(byTierDiv.chair)}</div>
+      ${byTierDiv.chair.length && byTierDiv.csuite.length ? '<div class="sys-org-conn"></div>' : ''}
+      <div class="sys-org-row">${row(byTierDiv.csuite)}</div>
+
+      ${(byTierDiv.personal.length || byTierDiv.business.length) ? '<div class="sys-org-conn"></div>' : ''}
+      <div class="sys-org-divs">
+        <div class="sys-org-div sys-org-div-personal">
+          <div class="sys-org-div-h">Personal Division</div>
+          <div class="sys-org-row">${row(byTierDiv.personal)}</div>
+        </div>
+        <div class="sys-org-div sys-org-div-business">
+          <div class="sys-org-div-h">Business Division</div>
+          <div class="sys-org-row">${row(byTierDiv.business)}</div>
+        </div>
+      </div>
+
+      ${byTierDiv.infra.length ? `
+        <div class="sys-org-conn"></div>
+        <div class="sys-org-row">${row(byTierDiv.infra)}</div>` : ''}
+
+      <div class="sys-org-legend">
+        <span><span class="sw" style="background:var(--good)"></span>fresh (&lt;24h)</span>
+        <span><span class="sw" style="background:var(--warn)"></span>stale (1–7d)</span>
+        <span><span class="sw" style="background:var(--bad)"></span>silent (&gt;7d)</span>
+        <span><span class="sw" style="background:var(--muted-2)"></span>never</span>
+        <span style="margin-left:auto"><span class="ts-box" style="border-color:#ffd700"></span>chair</span>
+        <span><span class="ts-box" style="border-color:#7b68ee"></span>c-suite</span>
+        <span><span class="ts-box" style="border-color:#3b82f6"></span>director</span>
+        <span><span class="ts-box" style="border-color:#f472b6"></span>venture</span>
+        <span><span class="ts-box" style="border-color:#22c55e"></span>worker</span>
+      </div>
+    </div>`;
+}
+
 function wireCardExpansion(root) {
   root.querySelectorAll('.sys-card').forEach(card => {
     if (!card.querySelector('.sys-detail')) return;
@@ -192,6 +262,9 @@ export default async function (root) {
 
     <div class="sys-section-h">Activity · last ${(data.activity || {}).window_days || 7} days</div>
     <div class="sys-grid-3" id="sys-activity">${activityCards(data.activity || {})}</div>
+
+    <div class="sys-section-h">Health · ${(data.agents || []).length} agents, by org tier</div>
+    <div class="card" style="cursor:default">${healthGrid(data.agents || [])}</div>
   `;
 
   wireCardExpansion(document.getElementById('sys-attention'));
