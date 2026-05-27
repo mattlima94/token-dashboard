@@ -105,8 +105,8 @@ Emitted by `generate_dashboard.py` to the same directory as `SYSTEM_DASHBOARD.md
 ```
 
 **Schema notes:**
-- `tier` ∈ `chair | csuite | director | venture | worker | infra`
-- `division` ∈ `personal | business | null`
+- `tier` (label) ∈ `chair | csuite | director | venture | worker | infra` — derived from registry numeric `tier` (1/2/3) + `role` field. The Chair (Dr. Lima) is synthetic — not in registry; injected by the generator.
+- `division` ∈ `personal | business | cross` — matches the registry value verbatim. Renderers map `cross` to the c-suite row (above the division split).
 - `freshness` ∈ `fresh | stale | silent | never` (thresholds: <24h / 1–7d / >7d / never run) — pre-computed server-side so renderers don't disagree
 - `last_run_age` is a pre-formatted display string; `last_run_iso` is the canonical timestamp
 - Renderers MUST treat unknown enum values as if absent (forward-compat: adding new tiers or freshness levels won't break clients)
@@ -162,17 +162,18 @@ Minimal change: replace hardcoded session badges (`"Phase 1 · session 33"`) wit
 
 ## Data sync — getting `agents_status.json` to the Vercel page
 
-The org chart is a static Vercel deploy. `agents_status.json` is regenerated nightly by a local cron job. To bridge: extend the existing `0 23 * * *` cron entry that runs `generate_dashboard.py` to also `git add` the JSON into the mcl-agent-orgchart repo and `git push` — Vercel auto-deploys on push.
+The org chart is a static Vercel deploy. `~/Desktop/mcl-agent-orgchart/` is **not a git repo** — deploys are manual via the `vercel` CLI (v51.7.0 installed at `/opt/homebrew/bin/vercel`). `agents_status.json` is regenerated nightly by a local cron job. To bridge: extend the existing `0 23 * * *` cron entry that runs `generate_dashboard.py` to also copy the JSON and run a Vercel production deploy.
 
 Sketch:
 ```bash
 python3 $PROJECTS/infrastructure/scripts/generate_dashboard.py
 cp $PROJECTS/infrastructure/agents_status.json ~/Desktop/mcl-agent-orgchart/
-cd ~/Desktop/mcl-agent-orgchart && git add agents_status.json \
-  && git diff --cached --quiet || git commit -m "auto: agents_status snapshot" && git push
+cd ~/Desktop/mcl-agent-orgchart && vercel deploy --prod --yes --token "$VERCEL_TOKEN"
 ```
 
-Alternative considered: GCS bucket with public read. Rejected — adds a dependency. Git-push approach reuses existing Vercel deploy plumbing.
+Requires: one-time `vercel link` in the org-chart dir (creates `.vercel/project.json` mapping the dir to the existing Vercel project) plus a `VERCEL_TOKEN` available to the cron environment. Both are captured as setup steps in the plan.
+
+Alternative considered: convert the dir to a git repo + connect to Vercel for auto-deploy on push. Rejected for v1 — adds the burden of managing a third git repo for one JSON file. The CLI deploy is one extra line in the cron and reuses the existing Vercel project.
 
 ## Backend — token dashboard server
 
