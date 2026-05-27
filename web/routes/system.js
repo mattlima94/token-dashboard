@@ -79,6 +79,61 @@ function attentionCards(attention) {
   `).join('');
 }
 
+function activityCards(activity) {
+  const d = activity.deliverables || { count: 0, by_agent: [] };
+  const bus = activity.message_bus || { inbox: 0, outbox: 0, watcher_age_min: null };
+  const top = activity.top_producer;
+
+  const cards = [
+    {
+      id: 'deliverables',
+      label: `Deliverables shipped`,
+      valueHtml: fmt.int(d.count),
+      sub: `across ${(d.by_agent || []).length} agents`,
+      sev: '',
+      detail: d.by_agent && d.by_agent.length ? `
+        <div class="sys-detail">
+          ${d.by_agent.slice(0, 10).map(r => `
+            <div class="di">
+              <span class="dot green"></span>
+              <span><code>${fmt.htmlSafe(r.agent)}</code>
+                ${(r.recent_titles || []).slice(0, 2).map(t => `<span class="meta" style="margin-left:8px">${fmt.htmlSafe(fmt.short(t, 50))}</span>`).join('')}
+              </span>
+              <span class="meta">${r.count} doc${r.count === 1 ? '' : 's'}</span>
+            </div>`).join('')}
+        </div>` : '',
+    },
+    {
+      id: 'bus',
+      label: 'Message bus throughput',
+      valueHtml: `${fmt.int(bus.inbox)}<span style="font-size:13px;color:var(--muted)"> in / </span>${fmt.int(bus.outbox)}<span style="font-size:13px;color:var(--muted)"> out</span>`,
+      sub: bus.watcher_age_min == null ? 'watcher status unknown'
+           : bus.watcher_age_min < 5 ? `watcher ${bus.watcher_age_min}m ago`
+           : `watcher ${bus.watcher_age_min}m ago — check`,
+      sev: bus.watcher_age_min != null && bus.watcher_age_min > 60 ? 'amber' : '',
+      detail: '',
+    },
+    {
+      id: 'top',
+      label: 'Top producer',
+      valueHtml: top ? `<span style="font-size:14px">${fmt.htmlSafe(top.agent)}</span>` : '<span style="font-size:14px;color:var(--muted)">—</span>',
+      sub: top ? `${top.count} doc${top.count === 1 ? '' : 's'}${top.last_age && top.last_age !== '-' ? ` · last ${top.last_age} ago` : ''}` : 'no deliverables this window',
+      sev: '',
+      detail: '',
+    },
+  ];
+
+  return cards.map(c => `
+    <div class="sys-card" data-card="${c.id}">
+      ${c.detail ? '<div class="chev">▸</div>' : ''}
+      <div class="l">${c.label}</div>
+      <div class="v ${c.sev}">${c.valueHtml}</div>
+      <div class="sub">${c.sub}</div>
+      ${c.detail}
+    </div>
+  `).join('');
+}
+
 function wireCardExpansion(root) {
   root.querySelectorAll('.sys-card').forEach(card => {
     if (!card.querySelector('.sys-detail')) return;
@@ -134,7 +189,11 @@ export default async function (root) {
 
     <div class="sys-section-h">Attention</div>
     <div class="sys-grid-3" id="sys-attention">${attentionCards(data.attention || {})}</div>
+
+    <div class="sys-section-h">Activity · last ${(data.activity || {}).window_days || 7} days</div>
+    <div class="sys-grid-3" id="sys-activity">${activityCards(data.activity || {})}</div>
   `;
 
   wireCardExpansion(document.getElementById('sys-attention'));
+  wireCardExpansion(document.getElementById('sys-activity'));
 }
