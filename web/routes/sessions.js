@@ -6,25 +6,86 @@ export default async function (root) {
   return renderSession(root, id);
 }
 
+function readFilter() {
+  const q = location.hash.split('?')[1] || '';
+  const m = /(?:^|&)filter=([^&]+)/.exec(q);
+  return m ? decodeURIComponent(m[1]) : 'all';
+}
+
+function writeFilter(value) {
+  const base = location.hash.replace(/^#/, '').split('?')[0] || '/sessions';
+  location.hash = '#' + base + '?filter=' + encodeURIComponent(value);
+}
+
+function verdictCell(s) {
+  if (s.heaviness === 'heavy') {
+    const reasons = [];
+    if (s.turns > 50) reasons.push(`${s.turns} turns`);
+    if ((s.cache_read_tokens || 0) > 5_000_000) reasons.push(`cache ${fmt.compact(s.cache_read_tokens)}`);
+    if ((s.input_share || 0) > 0.60) reasons.push(`in-share ${fmt.pct(s.input_share)}`);
+    return `<span class="verdict heavy">⚠ ${fmt.htmlSafe(reasons[0] || 'heavy')}</span>`;
+  }
+  if (s.heaviness === 'healthy') return '<span class="verdict healthy">✓ healthy</span>';
+  return '<span class="verdict closed">○ closed</span>';
+}
+
 async function renderList(root) {
-  const list = await api('/api/sessions?limit=100');
+  const filter = readFilter();
+  const all = await api('/api/sessions?limit=100');
+  const liveCount = all.filter(s => s.is_live).length;
+  const rows = filter === 'live' ? all.filter(s => s.is_live) : all;
+
   root.innerHTML = `
-    <div class="card">
-      <h2>Sessions</h2>
+    <div class="flex" style="margin-bottom:14px">
+      <h2 style="margin:0;font-size:16px;letter-spacing:-0.01em">Sessions</h2>
+      <div class="spacer"></div>
+    </div>
+
+    <div class="filter-chips">
+      <button class="chip ${filter === 'live' ? 'active' : ''}" data-filter="live">
+        ${liveCount > 0 ? '<span class="pulse-dot" style="margin-right:5px"></span>' : ''}live (${liveCount})
+      </button>
+      <button class="chip all ${filter === 'all' ? 'active' : ''}" data-filter="all">
+        all (${all.length})
+      </button>
+    </div>
+
+    <div class="card" style="padding:0">
       <table>
-        <thead><tr><th>started</th><th>project</th><th class="num">turns</th><th class="num">tokens</th><th>session</th></tr></thead>
+        <thead>
+          <tr>
+            <th style="width:24px"></th>
+            <th>started</th>
+            <th>project</th>
+            <th class="num">turns</th>
+            <th class="num">cache r</th>
+            <th class="num">in-share</th>
+            <th>heavy?</th>
+            <th>session</th>
+          </tr>
+        </thead>
         <tbody>
-          ${list.map(s => `
-            <tr>
-              <td class="mono">${fmt.ts(s.started)}</td>
-              <td title="${fmt.htmlSafe(s.project_slug)}">${fmt.htmlSafe(s.project_name || s.project_slug)}</td>
-              <td class="num">${fmt.int(s.turns)}</td>
-              <td class="num">${fmt.int(s.tokens)}</td>
-              <td><a href="#/sessions/${encodeURIComponent(s.session_id)}" class="mono">${fmt.htmlSafe(s.session_id.slice(0,8))}…</a></td>
-            </tr>`).join('')}
+          ${rows.length === 0
+            ? `<tr><td colspan="8" class="muted" style="padding:14px">No sessions match this filter.</td></tr>`
+            : rows.map(s => `
+              <tr>
+                <td>${s.is_live ? '<span class="pulse-dot"></span>' : ''}</td>
+                <td class="mono">${fmt.ts(s.started)}</td>
+                <td title="${fmt.htmlSafe(s.project_slug)}">${fmt.htmlSafe(s.project_name || s.project_slug)}</td>
+                <td class="num">${fmt.int(s.turns)}</td>
+                <td class="num">${fmt.compact(s.cache_read_tokens)}</td>
+                <td class="num">${fmt.pct(s.input_share)}</td>
+                <td>${verdictCell(s)}</td>
+                <td><a href="#/sessions/${encodeURIComponent(s.session_id)}" class="mono">${fmt.htmlSafe(s.session_id.slice(0,8))}…</a></td>
+              </tr>`).join('')}
         </tbody>
       </table>
-    </div>`;
+    </div>
+  `;
+
+  root.querySelectorAll('.filter-chips .chip').forEach(btn => {
+    btn.addEventListener('click', () => writeFilter(btn.dataset.filter));
+  });
 }
 
 async function renderSession(root, id) {
